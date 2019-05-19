@@ -1,0 +1,378 @@
+<head>
+    <title>Mapa</title>
+</head>
+<style>
+    /* Always set the map height explicitly to define the size of the div
+ * element that contains the map. */
+    #map {
+        height: 100%;
+    }
+
+    /* Optional: Makes the sample page fill the window. */
+    html,
+    body {
+        height: 100%;
+        margin: 0;
+        padding: 0;
+    }
+
+    #floating-panel {
+        position: absolute;
+        top: 10px;
+        left: 25%;
+        z-index: 5;
+        background-color: #fff;
+        padding: 5px;
+        border: 1px solid #999;
+        text-align: center;
+        font-family: 'Roboto', 'sans-serif';
+        line-height: 30px;
+        padding-left: 10px;
+    }
+
+    #floating-panel {
+        position: absolute;
+        top: 5px;
+        left: 50%;
+        margin-left: -180px;
+        width: 350px;
+        z-index: 5;
+        background-color: #fff;
+        padding: 5px;
+        border: 1px solid #999;
+    }
+
+    #latlng {
+        width: 225px;
+    }
+</style>
+<link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.8.2/css/all.css"
+    integrity="sha384-oS3vJWv+0UjzBfQzYUhtDYW+Pj2yciDJxpsK1OYPAYjqT085Qq/1cq5FLXAZQ7Ay" crossorigin="anonymous">
+<div id="app">
+    <div id="floating-panel">
+        <label>Buscar por: </label>
+        <select id="option">
+            <option value="1">Direccion</option>
+            <option value="2">Coordenadas</option>
+            <option value="3">Sector</option>
+            <option value="4">Area</option>
+        </select>
+        <input id="address" type="textbox" value="Santo Domingo, RD">
+        <input id="submit" type="button" value="Buscar">
+        <input id="submitCode" type="button" value="Buscar" style="display:none">
+        <input id="submitCity" type="button" value="Buscar" style="display:none">
+        <input id="submitFind" type="button" value="Buscar" style="display:none">
+    </div>
+    <div id="map"></div>
+</div>
+<!-- Replace the value of the key parameter with your own API key. -->
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@8"></script>
+<script src="https://code.jquery.com/jquery-3.4.1.min.js"
+    integrity="sha256-CSXorXvZcTkaix6Yvo6HppcZGetbYMGWSFlBw8HfCJo=" crossorigin="anonymous"></script>
+<script type="text/javascript">
+    var markers = [];
+    function initMap() {
+        var map = new google.maps.Map($("#map")[0], {
+            zoom: 14,
+            center: { lat: 18.4860575, lng: -69.93121169999999 }
+        });
+        google.maps.event.addListener(map, 'click', function (e) {
+            console.log(e.latLng);
+        })
+        var geocoder = new google.maps.Geocoder();
+        $("#submit").click(e => geocodeAddress(geocoder));
+        $("#submitCode").click(e => geocodeLatLng(geocoder));
+        $("#submitCity").click(e => getBounds(map));
+        $("#submitFind").click(e => findPlace());
+        $("#option").change(e => toogle(e.target.value));
+
+        fetch('/bordes').then(res => res.json())
+            .catch(error => { console.error('Error:', error); return undefined })
+            .then(response => {
+                localStorage.setItem('sectores', JSON.stringify(response));
+            })
+    }
+
+    function geocodeAddress(geocoder) {
+        console.log("adress")
+        if (!validInput())
+            return;
+        var address = document.getElementById('address').value;
+        let resultsMap = new google.maps.Map($("#map")[0], {
+            zoom: 14,
+            center: { lat: 18.4860575, lng: -69.93121169999999 }
+        });
+        var infowindow = new google.maps.InfoWindow;
+        geocoder.geocode({ 'address': address }, function (results, status) {
+            if (status === 'OK') {
+                let loc = results[0].geometry.location;
+                console.log(loc);
+                resultsMap.setCenter(loc);
+                var marker = new google.maps.Marker({
+                    map: resultsMap,
+                    position: results[0].geometry.location
+                });
+                infowindow.setContent(`${loc.lat()},${loc.lng()}`);
+                infowindow.open(resultsMap, marker);
+            } else {
+                Swal.fire(
+                    'Error',
+                    status,
+                    'error'
+                )
+            }
+        });
+    }
+
+    function geocodeLatLng(geocoder) {
+        console.log("geo")
+        var infowindow = new google.maps.InfoWindow;
+        var map = initializeMap(18.4860575, -69.93121169999999, 13);
+        if (!validInput())
+            return;
+        var input = document.getElementById('address').value;
+        var latlngStr = input.split(',', 2);
+        var latlng = { lat: parseFloat(latlngStr[0]), lng: parseFloat(latlngStr[1]) };
+        geocoder.geocode({ 'location': latlng }, function (results, status) {
+            if (status === 'OK') {
+                if (results[0]) {
+                    map.setZoom(15);
+                    map.setCenter(latlng)
+                    var marker = new google.maps.Marker({
+                        position: latlng,
+                        map: map
+                    });
+                    infowindow.setContent(results[0].formatted_address);
+                    infowindow.open(map, marker);
+                    markers = [];
+                    markers.push(marker);
+
+                    let sector = existInPoint({ lat: latlng.lat, lng: latlng.lng });
+                    if (sector) {
+                        drawMap(sector.coords, map, false, sector.nombre);
+                    }
+
+
+                } else {
+                    Swal.fire(
+                        'Error',
+                        'No se encontro resultados',
+                        'error'
+                    )
+                }
+            } else {
+                Swal.fire(
+                    'Error',
+                    status,
+                    'error'
+                )
+            }
+        });
+    }
+
+    function findPlace() {
+        if (!validInput())
+            return;
+        let query = $("#address").val();
+        var url = `/bounds?search=${query}`;
+        Swal.fire({
+            title: '<strong>Cargando...</strong>',
+            html:
+                '<i class="fas fa-spinner fa-spin"></i>',
+            showCancelButton: false,
+            showConfirmButton: false,
+            allowOutsideClick: false
+        })
+        fetch(url).then(res => res.json())
+            .catch(error => {
+                Swal.close()
+                Swal.fire(
+                    'Error',
+                    'No se encontro resultados',
+                    'error'
+                )
+                console.error('Error:', error);
+            })
+            .then(response => {
+                Swal.close()
+                console.log('Success:', response);
+                if (!response.length) {
+                    Swal.fire(
+                        'Error',
+                        'No se encontro resultados',
+                        'error'
+                    )
+                    return;
+                }
+                drawMapFromAPI(response[0].geojson.coordinates[0], response[0].lat, response[0].lon);
+            });
+    }
+
+    function drawMapFromAPI(coordinates, lat, lng) {
+        let boundryCoordinates = []
+        coordinates.forEach(coordinate => {
+            let obj = {
+                lat: coordinate[1], lng: coordinate[0]
+            }
+            boundryCoordinates.push(obj);
+        });
+
+        var Boundry = new google.maps.Polygon({
+            paths: boundryCoordinates,
+            strokeColor: '#FF0000',
+            strokeOpacity: 0.8,
+            strokeWeight: 2,
+            fillColor: '#FF0000',
+            fillOpacity: 0.35
+        });
+
+        var map = initializeMap(Number(lat), Number(lng), 18);
+        Boundry.setMap(map);
+    }
+
+
+    function getBounds(map) {
+        if (!validInput())
+            return;
+        let query = $("#address").val();
+        var url = `/sectores?nombre=${query}`;
+        Swal.fire({
+            title: '<strong>Cargando...</strong>',
+            html:
+                '<i class="fas fa-spinner fa-spin"></i>',
+            showCancelButton: false,
+            showConfirmButton: false,
+            allowOutsideClick: false
+        })
+        fetch(url).then(res => res.json())
+            .catch(error => console.error('Error:', error))
+            .then(response => {
+                Swal.close()
+                console.log('Success:', response);
+                if (!response.length) {
+                    Swal.fire(
+                        'Error',
+                        'No se encontro resultados',
+                        'error'
+                    )
+                    return;
+                }
+                drawMap(response, map);
+            });
+    }
+
+    function toogle(value) {
+        $("#address").val("");
+        switch (value) {
+            case "1":
+                document.getElementById('submit').style.display = 'initial';
+                document.getElementById('submitCode').style.display = 'none';
+                document.getElementById('submitCity').style.display = 'none';
+                document.getElementById('submitFind').style.display = 'none';
+                break;
+
+            case "2":
+                document.getElementById('submitCode').style.display = 'initial';
+                document.getElementById('submit').style.display = 'none';
+                document.getElementById('submitCity').style.display = 'none';
+                document.getElementById('submitFind').style.display = 'none';
+                break;
+
+            case "3":
+                document.getElementById('submitCity').style.display = 'initial';
+                document.getElementById('submit').style.display = 'none';
+                document.getElementById('submitCode').style.display = 'none';
+                document.getElementById('submitFind').style.display = 'none';
+                break;
+
+            case "4":
+                document.getElementById('submitCity').style.display = 'none';
+                document.getElementById('submit').style.display = 'none';
+                document.getElementById('submitCode').style.display = 'none';
+                document.getElementById('submitFind').style.display = 'initial';
+                break;
+        }
+
+    }
+
+    function drawMap(coordinates, map, createNewMap = true, name) {
+        let boundryCoordinates = []
+        if (createNewMap) {
+
+            coordinates.forEach(coordinate => {
+                let obj = {
+                    lat: coordinate[1], lng: coordinate[0]
+                }
+                boundryCoordinates.push(obj);
+            });
+        } else {
+            boundryCoordinates = coordinates;
+        }
+
+        var Boundry = new google.maps.Polygon({
+            paths: boundryCoordinates,
+            strokeColor: '#447fdd',
+            strokeOpacity: 0.8,
+            strokeWeight: 2,
+            fillColor: '#447fdd',
+            fillOpacity: 0.35
+        });
+
+        if (createNewMap)
+            map = initializeMap(18.4860575, -69.93121169999999, 13);
+        Boundry.setMap(map);
+
+        attachPolygonInfoWindow(Boundry, name, map)
+    }
+
+    function validInput() {
+        let input = $("#address").val();
+        if (input == "" || input == null || input == undefined)
+            return false;
+
+        return true;
+    }
+
+    function initializeMap(lat, lng, zoom = 13) {
+        let map = new google.maps.Map(document.getElementById('map'), {
+            zoom,
+            center: { lat, lng }
+        });
+        return map;
+    }
+
+    function existInPoint(latLng) {
+        const response = JSON.parse(localStorage.getItem('sectores'));
+        let coordsContain;
+        let loc = new google.maps.LatLng(latLng.lat, latLng.lng);
+        for (let index = 0; index < response.length; index++) {
+            const group = response[index];
+            var poligon = new google.maps.Polygon({ paths: group.coords });
+            let exist = google.maps.geometry.poly.containsLocation(loc, poligon);
+            if (exist) {
+                coordsContain = group;
+                break;
+            }
+        }
+        return coordsContain;
+
+    }
+
+    function attachPolygonInfoWindow(polygon, name, map) {
+        if (!name)
+            return;
+        var infoWindow = new google.maps.InfoWindow();
+        google.maps.event.addListener(polygon, 'mouseover', function (e) {
+            infoWindow.setContent(name);
+            var latLng = e.latLng;
+            infoWindow.setPosition(latLng);
+            infoWindow.open(map);
+        });
+    }
+
+
+</script>
+<script async defer
+    src="https://maps.googleapis.com/maps/api/js?key=<YOUR_API_KEY>&callback=initMap&libraries=geometry">
+    </script>
+<script src=" https://cdnjs.cloudflare.com/ajax/libs/axios/0.18.0/axios.js"> </script>
